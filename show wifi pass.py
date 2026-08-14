@@ -1,38 +1,68 @@
 import subprocess
 import re
+import csv
+from typing import List, Dict
 
-def get_wifi_passwords():
-    print("===============================")
-    print("      Saved WiFi Passwords     ")
-    print("===============================")
-
-    # Get the list of all profiles
+def run_command(command: str) -> str:
+    """Executes OS commands with UTF-8 encoding configuration."""
+    full_cmd = f"chcp 65001 > nul && {command}"
     try:
-        profiles_data = subprocess.check_output(['netsh', 'wlan', 'show', 'profiles']).decode('utf-8', errors="backslashreplace")
-        profile_names = re.findall(r"All User Profile\s+:\s(.*)", profiles_data)
+        return subprocess.check_output(full_cmd, shell=True, stderr=subprocess.DEVNULL).decode('utf-8', errors='ignore')
+    except subprocess.CalledProcessError:
+        return ""
 
-        for name in profile_names:
-            # Clean up trailing carriage returns
-            name = name.strip()
-            
-            # Get detailed info for each profile
-            profile_info = subprocess.check_output(['netsh', 'wlan', 'show', 'profile', name, 'key=clear']).decode('utf-8', errors="backslashreplace")
-            
-            # Find the password (Key Content)
-            password_search = re.search(r"Key Content\s+:\s(.*)", profile_info)
-            
-            if password_search:
-                password = password_search.group(1).strip()
-            else:
-                password = "[No Password Found/Open Network]"
+def get_wifi_profiles() -> List[str]:
+    """Retrieves all saved Wi-Fi profile names."""
+    output = run_command("netsh wlan show profiles")
+    profiles = []
+    
+    for line in output.splitlines():
+        if ":" in line:
+            parts = line.split(":", 1)
+            key, val = parts[0].strip(), parts[1].strip()
+            if val and not any(kw in key.lower() for kw in ["interface", "hosted"]):
+                if "profile" in key.lower() or "user" in key.lower():
+                    profiles.append(val)
+    return profiles
 
-            print(f"SSID: {name}")
-            print(f"Password: {password}")
-            print("-" * 30)
+def get_wifi_passwords() -> List[Dict[str, str]]:
+    """Extracts passwords for each Wi-Fi profile."""
+    profiles = get_wifi_profiles()
+    results = []
 
+    print(f"\n{'Wi-Fi Name (SSID)':<35} | {'Password':<25}")
+    print("-" * 63)
+
+    for profile in profiles:
+        cmd = f'netsh wlan show profile name="{profile}" key=clear'
+        profile_info = run_command(cmd)
+
+        password_match = re.search(r"(?:Key Content|محتوای کلید)\s*:\s*(.*)", profile_info, re.IGNORECASE)
+        
+        if password_match:
+            password = password_match.group(1).strip()
+        else:
+            password = "<Open / No Password>"
+
+        results.append({"ssid": profile, "password": password})
+        print(f"{profile:<35} | {password:<25}")
+
+    return results
+
+def save_to_csv(data: List[Dict[str, str]], filename: str = "wifi_passwords.csv") -> None:
+    """Saves extracted data to a CSV file."""
+    try:
+        with open(filename, mode="w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.DictWriter(file, fieldnames=["ssid", "password"])
+            writer.writeheader()
+            writer.writerows(data)
+        print(f"\n✅ Results successfully saved to '{filename}'.")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"\n❌ Error saving file: {e}")
 
 if __name__ == "__main__":
-    get_wifi_passwords()
-    input("\nPress Enter to exit...")
+    wifi_data = get_wifi_passwords()
+    
+    save_choice = input("\nDo you want to save the results to a CSV file? (y/n): ").strip().lower()
+    if save_choice == 'y':
+        save_to_csv(wifi_data)
